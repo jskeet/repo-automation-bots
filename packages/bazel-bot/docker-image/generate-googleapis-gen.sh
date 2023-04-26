@@ -40,35 +40,33 @@ export GOOGLEAPIS_GEN=${GOOGLEAPIS_GEN:=`realpath googleapis-gen`}
 
 mydir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
-# Override in tests.
-INSTALL_CREDENTIALS=${INSTALL_CREDENTIALS:="$mydir/install-credentials.sh"}
-
 # Pull both repos to make sure we're up to date.
 git -C "$GOOGLEAPIS" pull
-git -C "$GOOGLEAPIS_GEN" pull
+# git -C "$GOOGLEAPIS_GEN" pull
 
 # Collect the history of googleapis.
 shas=$(git -C "$GOOGLEAPIS" log --format=%H)
 
 # Collect shas from googleapis for which we haven't yet generated code in googleapis-gen.
-git -C "$GOOGLEAPIS_GEN" tag > tags.txt
+# git -C "$GOOGLEAPIS_GEN" tag > tags.txt
 ungenerated_shas=()
-for sha in $shas; do
-    if grep $sha tags.txt; then
-        # Found a sha we already generated.
-        break
-    else
-        # If as $sha is contained in a list of bad SHAs (SHAs that
-        # will cause bazel to fail) skip the sha. The variable $BROKEN_SHAS
-        # is defined in the Cloud Build UI, with the intention that it is only
-        # used for exceptional circumstances.
-        if echo $BROKEN_SHAS | grep $sha; then
-            echo "skipping $sha"
-        else
-            ungenerated_shas+=($sha)
-        fi
-    fi
-done
+#for sha in $shas; do
+#    if grep $sha tags.txt; then
+#        # Found a sha we already generated.
+#        break
+#    else
+#        # If as $sha is contained in a list of bad SHAs (SHAs that
+#        # will cause bazel to fail) skip the sha. The variable $BROKEN_SHAS
+#        # is defined in the Cloud Build UI, with the intention that it is only
+#        # used for exceptional circumstances.
+#        if echo $BROKEN_SHAS | grep $sha; then
+#            echo "skipping $sha"
+#        else
+#            ungenerated_shas+=($sha)
+#        fi
+#    fi
+#done
+ungenerated_shas+=("70eaf0d")
 
 # Iterate over the ungenerated_shas from oldest to newest.
 for (( idx=${#ungenerated_shas[@]}-1 ; idx>=0 ; idx-- )) ; do
@@ -79,7 +77,7 @@ for (( idx=${#ungenerated_shas[@]}-1 ; idx>=0 ; idx-- )) ; do
     # Choose build targets.
     if [[ -z "$BUILD_TARGETS" ]] ; then
         targets=$(cd "$GOOGLEAPIS" \
-        && bazelisk query $BAZEL_FLAGS  'filter("-(go|csharp|java|php|ruby|nodejs|py)$", kind("rule", //...:*))' \
+        && bazelisk query $BAZEL_FLAGS  'filter("-(csharp)$", kind("rule", //...:*))' \
         | grep -v -E ":(proto|grpc|gapic)-.*-java$")
     else
         targets="$BUILD_TARGETS"
@@ -119,7 +117,7 @@ for (( idx=${#ungenerated_shas[@]}-1 ; idx>=0 ; idx-- )) ; do
             failed_targets+=($target)
             # Restore the original source code because bazel failed to generate
             # the new source code.
-            git -C "$GOOGLEAPIS_GEN" checkout -- "$target_dir"
+            # git -C "$GOOGLEAPIS_GEN" checkout -- "$target_dir"
             # TODO: report an issue with 'gh'
         }
     done
@@ -129,35 +127,4 @@ for (( idx=${#ungenerated_shas[@]}-1 ; idx>=0 ; idx-- )) ; do
     set -e
     echo "$failed_percent% of targets failed to build."
     printf '%s\n' "${failed_targets[@]}"
-
-    # Tell git about the new source code we just copied into googleapis-gen.
-    git -C "$GOOGLEAPIS_GEN" add -A
-
-    # Credentials only last 10 minutes, so install them right before git pushing.
-    $INSTALL_CREDENTIALS
-
-    if git -C "$GOOGLEAPIS_GEN" diff-index --quiet HEAD ; then
-        # No changes to commit, so just push the tag.
-        git -C "$GOOGLEAPIS_GEN" tag "googleapis-$sha"
-        git -C "$GOOGLEAPIS_GEN" push origin "googleapis-$sha"
-    else
-        # Determine the current branch so we can explicitly push to it
-        # TODO(jskeet): use the commented-out line below; it requires
-        # a newer version of git (2.23.0) than we have (2.20.1).
-        # googleapis_gen_branch=$(git -C "$GOOGLEAPIS_GEN" branch --show-current)
-        if [[ $TARGET_BRANCH != "" ]]
-        then
-          googleapis_gen_branch=$TARGET_BRANCH
-        else
-          googleapis_gen_branch=master
-        fi
-
-        # Copy the commit message from the commit in googleapis.
-        git -C "$GOOGLEAPIS" log -1 --format=%B > commit-msg.txt
-        echo "Source-Link: https://github.com/googleapis/googleapis/commit/$sha" >> commit-msg.txt
-        # Commit changes and push them.
-        git -C "$GOOGLEAPIS_GEN" commit -F "$(realpath commit-msg.txt)"
-        git -C "$GOOGLEAPIS_GEN" tag "googleapis-$sha"
-        git -C "$GOOGLEAPIS_GEN" push origin "$googleapis_gen_branch" "googleapis-$sha"
-    fi
 done
